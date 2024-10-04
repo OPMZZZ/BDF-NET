@@ -8,83 +8,120 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
-
+# Function to visualize and save results for comparison
 def draw(real, img1, img2, slice):
+    # Convert tensors to numpy arrays and select specific slices for visualization
     img1 = img1.cpu().numpy()[0, [0, 5, 10, 15, -1], :, :]
     img2 = img2.cpu().numpy()[0, [0, 5, 10, 15, -1], :, :]
     real1 = real.cpu()[0, 0, :, :].unsqueeze(0).numpy()
     real2 = real.cpu()[0, -1, :, :].unsqueeze(0).numpy()
+
+    # Concatenate real and predicted images for comparison
     img1 = np.concatenate((real1, img1, real2), axis=0)
     img2 = np.concatenate((real1, img2, real2), axis=0)
-    img3 = np.abs(img1- img2)
-    fig, axes = plt.subplots(3, 7, figsize=(26, 8))  # 2行7列
+
+    # Compute the absolute difference between the two sets of images
+    img3 = np.abs(img1 - img2)
+
+    # Create a 3x7 grid of subplots for visualization
+    fig, axes = plt.subplots(3, 7, figsize=(26, 8))
+
+    # Organize images into lists for easier iteration
     imgs = [img1, img2]
     name = ['real', 'fake']
-    # 假设 img1 和 img2 是要展示的多幅图像，可以将它们组织成列表或数组
-    # 假设 imgs1 和 imgs2 是包含多幅图像的列表
-    # 注意：确保 imgs1 和 imgs2 中包含足够多的图像以填充2行7列的子图
+
+    # Loop through real and fake images to display them on the subplots
     for i in range(2):
         img = imgs[i]
         for j in range(7):
             img1 = img[j]
-            # 在子图中显示 img1
-            axes[i, j].imshow(img1, cmap='binary')  # 这里使用 'rainbow' colormap，根据需要更改
-            # 隐藏坐标轴
+            # Display the image on the subplot
+            axes[i, j].imshow(img1, cmap='binary')
+            # Hide axis labels
             axes[i, j].axis('off')
+
+    # Display the difference images in the last row with a color bar
     for j in range(7):
         im = axes[2, j].imshow(img3[j], cmap='jet')
         fig.colorbar(im, ax=axes[2, j])
         axes[2, j].axis('off')
-    # 调整布局
+
+    # Adjust layout and save the image to disk
     plt.tight_layout()
-    # 保存图像
     plt.savefig(f'./outputs/{slice:03d}.png')
     plt.close()
 
 if __name__ == '__main__':
-    opt = TestOptions().parse()  # 获取测试选项
-    # 为测试硬编码一些参数
-    opt.num_threads = 0  # 测试代码仅支持 num_threads = 1
-    opt.batch_size = 1  # 测试代码仅支持 batch_size = 1
-    opt.serial_batches = True  # 禁用数据洗牌；如果需要在随机选择的图像上查看结果，请取消注释此行。
-    opt.no_flip = True  # 无翻转；如果需要在翻转的图像上查看结果，请取消注释此行。
-    opt.display_id = -1  # 无Visdom显示；测试代码将结果保存到HTML文件中。
-    dataset = create_dataset(opt, size=1)  # 根据 opt.dataset_mode 和其他选项创建数据集
-    model = create_model(opt)  # 根据 opt.model 和其他选项创建模型
-    for i in range(1,2):
+    opt = TestOptions().parse()  # Parse testing options
+
+    # Override some options for testing
+    opt.num_threads = 0  # Set number of threads to 0 as the test code only supports single-threading
+    opt.batch_size = 1  # Set batch size to 1 for testing
+    opt.serial_batches = True  # Disable shuffling for consistency during testing
+    opt.no_flip = True  # Disable image flipping for testing
+    opt.display_id = -1  # Disable Visdom display, results will be saved to HTML files instead
+
+    # Create the dataset based on options
+    dataset = create_dataset(opt, size=1)
+
+    # Create the model based on options
+    model = create_model(opt)
+
+    # Loop through a few iterations (hardcoded as 1 to 2 here)
+    for i in range(1, 2):
         opt.load_iter = i
-        model.setup(opt)  # 常规设置：加载和打印网络；创建调度器
-        # 创建一个网站
-        web_dir = os.path.join(opt.results_dir, opt.name, '{}_{}'.format(opt.phase, opt.epoch))  # 定义网站目录
-        if opt.load_iter > 0:  # 默认情况下，load_iter 为0
+        model.setup(opt)  # Setup the model by loading weights, printing the network structure, etc.
+
+        # Create a directory for saving results
+        web_dir = os.path.join(opt.results_dir, opt.name, '{}_{}'.format(opt.phase, opt.epoch))
+        if opt.load_iter > 0:  # Append iteration number to the directory name if not zero
             web_dir = '{:s}_iter{:d}'.format(web_dir, opt.load_iter)
-        print('创建网站目录', web_dir)
-        webpage = html.HTML(web_dir, '实验 = %s，阶段 = %s，轮次 = %s' % (opt.name, opt.phase, opt.epoch))
-        # 以 eval 模式进行测试。这仅影响像 batchnorm 和 dropout 等层。
-        # 对于 [pix2pix]：我们在原始 pix2pix 中使用 batchnorm 和 dropout。您可以尝试带有和不带有 eval() 模式的效果。
-        # 对于 [CycleGAN]：这不应影响 CycleGAN，因为 CycleGAN 使用没有 dropout 的 instancenorm。
+        print('Creating website directory', web_dir)
+
+        # Initialize an HTML object to save the experiment's results
+        webpage = html.HTML(web_dir, 'Experiment = %s, Phase = %s, Epoch = %s' % (opt.name, opt.phase, opt.epoch))
+
+        # Set model to evaluation mode if specified; affects layers like batchnorm and dropout
         if opt.eval:
             model.eval()
+
+        # Initialize lists to store metrics
         mean_rmse = []
         mean_ssim = []
         mean_psnr = []
-        for _, patient in enumerate(dataset):  # 内循环，每个 epoch 内部
 
+        # Loop through the dataset (outer loop through patients)
+        for _, patient in enumerate(dataset):
+            # Create a dataloader for the patient-specific data
             minidataset = CustomDataset(patient)
             data_loader = torch.utils.data.DataLoader(minidataset, batch_size=opt.batch_size,
                                                       num_workers=opt.num_threads)
+
+            # Inner loop through the data
             for i, data in enumerate(data_loader):
-                model.set_input(data)  # 从数据加载器中解压数据
-                model.test()  # 进行推断
-                visuals = model.get_current_visuals()  # 获取图像结果   # 获取图像路径
+                model.set_input(data)  # Unpack data from dataloader and prepare for inference
+                model.test()  # Run inference
+
+                # Get visuals and loss metrics from the model
+                visuals = model.get_current_visuals()
                 x, y, z, d = model.cal_loss()
+
+                # Append metrics to their respective lists
                 mean_rmse.append(x)
                 mean_ssim.append(y)
                 mean_psnr.append(z)
+
+                # Optionally, visualize and save the images
                 # draw(*d, i)
                 # save_images(webpage, visuals, i, aspect_ratio=opt.aspect_ratio, width=opt.display_winsize)
+
+            # Save the model's state
             model.save()
+
+            # Print the average metrics across the dataset
             print(f'RMSE: {np.mean(mean_rmse)}')
             print(f'SSIM: {np.mean(mean_ssim)}')
             print(f'PSNR: {np.mean(mean_psnr)}')
-        webpage.save()  # 保存HTML
+
+        # Save the results as an HTML webpage
+        webpage.save()
